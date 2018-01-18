@@ -13,7 +13,7 @@ import random
 import portfolio
 
 
-TOKEN = "517822376:AAE5k99ao4wWo1NsdogfcTdoJ1iY0dm4dd8"
+TOKEN = "TOKEN"
 # ts = TimeSeries(key='WXVDTULIQ8D8RY0C') 
 
 # Enable logging
