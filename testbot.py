@@ -14,7 +14,7 @@ import random
 import portfolio as p
 
 
-TOKEN = "534331907:AAHxuNSQcu99g2WITEdQ-p00AA30KXNSwSc"
+TOKEN = "TOKEN"
 
 # Logging to find and squish bugs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
