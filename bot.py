@@ -97,7 +97,7 @@ def news(bot, update, args):
 
 
 def portfolios(bot, update):
-    """Returns all portfolio information."""
+    """Returns all portfolio information when the /portfolios command is issued."""
 
     portfolios, keyboard = [], []
 
@@ -130,22 +130,26 @@ def portfolios(bot, update):
 
 
 def create(bot, update, args):
-    """Creates a portfolio for the user."""
+    """Creates a portfolio for the user when the /create command is issued."""
 
     user_id = update.message.from_user.__dict__['id']
     
-    # Check if user already has a portfolio with the same name
+    ## Check if user already has a portfolio with the same name
+    # Create a potential portfolio for the user to compare to the one that could be in the DB
     potential = pf.get_item(
         Key={
             'user': user_id
         }
     )
-
-    if 'Item' in potential:         # user has been created and added to database
+    
+    # If the 'Item' key is in the potential dictionary, the user has already been created.
+    if 'Item' in potential:
+        # If the portfolio name is already within the dictionary, the portfolio has already been created.
         if args[0] in potential['Item']['portfolios']:
             update.message.reply_text(f'You already have a portfolio named {args[0]}!')
             return False
-
+        
+        # Otherwise we just update the list of all portfolios for that user here.
         else:
             pf.update_item(
                 Key={
@@ -156,9 +160,9 @@ def create(bot, update, args):
                     ':r':{'tickers':{}, 'value':0}
                 }
             )
-
+    
+    # Since the 'Item' is not in the potential dictionary, user was not created so do that here.
     else:
-        # Create the portfolio using user ID and portfolio name
         pf.put_item(
             Item={
                 'user': user_id,
