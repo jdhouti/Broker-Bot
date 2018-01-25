@@ -6,15 +6,19 @@
 
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-from pymongo import MongoClient
+import boto3    # dynamodb :D
+from boto3.dynamodb.conditions import Key, Attr
 import logging
 import requests
 import json
 import random
 import portfolio as p
 
+# Set up the database connection with DynamoDB
+dynamodb = boto3.resource('dynamodb')
+pf = dynamodb.Table('portfolios')
 
-TOKEN = "534331907:AAHxuNSQcu99g2WITEdQ-p00AA30KXNSwSc"
+TOKEN = "TOKEN"
 
 # Logging to find and squish bugs
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -38,6 +42,30 @@ def help(bot, update):
                         '/portfolios - view all portfolios you\'ve created'
                         '/create (name) - creates a portfolio')
     update.message.reply_text(formatted_string, quote=False, parse_mode=ParseMode.HTML)
+
+
+def price(bot, update, args):
+    """Send a message with the stock price of the ticker."""
+    try:
+        raw_data = requests.get(f'https://api.iextrading.com/1.0/stock/{args[0]}/quote')
+        data = json.loads(raw_data.text)
+
+        price = "$" + '{:20,.2f}'.format(data['latestPrice'])
+        company = data['companyName']
+        volume = "$" + '{:20,.2f}'.format(data['avgTotalVolume'])
+        mktcap = "$" + '{:20,.2f}'.format(data['marketCap'])
+        
+        string = (f'<b>{company} ({args[0].upper()}</b>)'
+                    f'\n😎 Price: {price.replace(" ", "")}'
+                    f'\n💰 Volume: {volume.replace(" ", "")}'
+                    f'\n🌡️ Market Cap: {mktcap.replace(" ", "")}')
+        update.message.reply_text(string, quote=False, parse_mode=ParseMode.HTML)
+
+        return None
+
+    except json.decoder.JSONDecodeError:
+        update.message.reply_text(f'{args[0].upper()} isn\'t a valid ticker 😔', quote=False)
+        return None
 
 
 def news(bot, update, args):
@@ -68,76 +96,8 @@ def news(bot, update, args):
         return False
 
 
-def delete(bot, update, args):
-    """Deletes a portfolio from the database"""
-
-    # Open db connection
-    mgclient = MongoClient()
-    db = mgclient.user_db           # Create database for user information
-    portfolio_db = db.portfolios    # Create table for portfolio data
-
-
-
-
-def create(bot, update, args):
-    """Creates a portfolio for the user."""
-    
-    # Open db connection
-    mgclient = MongoClient()
-    db = mgclient.user_db           # Create database for user information
-    portfolio_db = db.portfolios    # Create table for portfolio data
-
-    username = update.message.from_user.__dict__['username']
-    
-    # Check if user already has a portfolio with the same name
-    if db.portfolios.find_one({'owner':update.message.from_user.__dict__['id'], 'name':args[0].title()}):
-        update.message.reply_text('You already have a portfolio with that name!')
-        return False
-
-    # Create the portfolio using user ID and portfolio name
-    new_portfolio = p.Portfolio(update.message.from_user.__dict__['id'], args[0].title())
-
-    # Insert the class into the mongodb database
-    db.portfolios.insert(new_portfolio.__dict__)
-    update.message.reply_text(f'@{username}, your portfolio was created!', quote=False)
-
-    # Close db connection
-    mgclient.close()
-    return True
-
-
-def button(bot, update):
-    """Handles the behavior of the inline buttons."""
-
-    # Open the database connection
-    mgclient = MongoClient()
-    db = mgclient.user_db           # Connect to database of user information
-    portfolio_db = db.portfolios    # Connect to table of portfolio data
-
-    # Retrieve the information on which button was pressed
-    query = update.callback_query
-
-    # Find which portfolio the user selected based on the returned query
-    portfolio = portfolio_db.find_one({'owner':query.from_user['id'], 'name':query.data})
-    text = f"<b>{query.data}</b>\nValue: ${portfolio['value']}"
-
-    bot.edit_message_text(text=text,
-                          chat_id=query.message.chat_id,
-                          message_id=query.message.message_id,
-                          parse_mode=ParseMode.HTML)
-
-    # Close the database connection
-    mgclient.close()
-    return True
-
-
 def portfolios(bot, update):
     """Returns all portfolio information."""
-
-    # Open the database connection
-    mgclient = MongoClient()
-    db = mgclient.user_db           # Connect to database of user information
-    portfolio_db = db.portfolios    # Connect to table of portfolio data
 
     portfolios, keyboard = [], []
 
@@ -169,25 +129,84 @@ def portfolios(bot, update):
     return True
 
 
-def price(bot, update, args):
-    """Send a message with the stock price of the ticker."""
-    try:
-        raw_data = requests.get(f'https://api.iextrading.com/1.0/stock/{args[0]}/quote')
-        data = json.loads(raw_data.text)
+def create(bot, update, args):
+    """Creates a portfolio for the user."""
 
-        price = data['latestPrice']
-        company = data['companyName']
-        volume = data['avgTotalVolume']
-        mktcap = data['marketCap']
-        string = (f'{company} ({args[0].upper()})'
-                    f'\n😎 Price: {price}'
-                    f'\n💰 Volume: {volume}'
-                    f'\n🌡️ Market Cap: {mktcap}')
-        update.message.reply_text(string, quote=False)
-        return None
-    except json.decoder.JSONDecodeError:
-        update.message.reply_text(f'{args[0]} isn\'t a valid ticker 😔', quote=False)
-        return None
+    user_id = update.message.from_user.__dict__['id']
+    
+    # Check if user already has a portfolio with the same name
+    potential = pf.get_item(
+        Key={
+            'user': user_id
+        }
+    )
+
+    if 'Item' in potential:         # user has been created and added to database
+        if args[0] in potential['Item']['portfolios']:
+            update.message.reply_text(f'You already have a portfolio named {args[0]}!')
+            return False
+
+        else:
+            pf.update_item(
+                Key={
+                    'user': user_id
+                },
+                UpdateExpression=f"set portfolios.{args[0]} = :r",
+                ExpressionAttributeValues={
+                    ':r':{'tickers':{}, 'value':0}
+                }
+            )
+
+    else:
+        # Create the portfolio using user ID and portfolio name
+        pf.put_item(
+            Item={
+                'user': user_id,
+                'portfolios': {
+                    args[0]: {
+                        'tickers': {},
+                        'value': 0
+                    }
+                }
+            }
+        )
+
+    update.message.reply_text(f'Your portfolio, {args[0].title()} was created!', quote=False)
+    return True
+
+
+def delete(bot, update, args):
+    """Deletes a portfolio from the database"""
+
+    # Open db connection
+    mgclient = MongoClient()
+    db = mgclient.user_db           # Create database for user information
+    portfolio_db = db.portfolios    # Create table for portfolio data
+
+
+def button(bot, update):
+    """Handles the behavior of the inline buttons."""
+
+    # Open the database connection
+    mgclient = MongoClient()
+    db = mgclient.user_db           # Connect to database of user information
+    portfolio_db = db.portfolios    # Connect to table of portfolio data
+
+    # Retrieve the information on which button was pressed
+    query = update.callback_query
+
+    # Find which portfolio the user selected based on the returned query
+    portfolio = portfolio_db.find_one({'owner':query.from_user['id'], 'name':query.data})
+    text = f"<b>{query.data}</b>\nValue: ${portfolio['value']}"
+
+    bot.edit_message_text(text=text,
+                          chat_id=query.message.chat_id,
+                          message_id=query.message.message_id,
+                          parse_mode=ParseMode.HTML)
+
+    # Close the database connection
+    mgclient.close()
+    return True
 
 
 def error(bot, update, error):
