@@ -6,17 +6,8 @@
 
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
-import boto3    # dynamodb :D
-from boto3.dynamodb.conditions import Key, Attr
-import logging
-import requests
-import json
-import random
-import portfolio as p
-
-# Set up the database connection with DynamoDB
-dynamodb = boto3.resource('dynamodb')
-pf = dynamodb.Table('portfolios')
+import logging, requests, json, random, boto3
+import portfolio
 
 TOKEN = "TOKEN"
 
@@ -28,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # This is where all of the bot commands lie
 def start(bot, update):
-    """Send a message when the command /start is issued."""
+    """Send a message when the command /start is issued and creates database entry."""
     update.message.reply_text('This bot is your new personal broker 😎\nType /help to get started.', quote=False)
 
 
@@ -99,18 +90,16 @@ def news(bot, update, args):
 def portfolios(bot, update):
     """Returns all portfolio information when the /portfolios command is issued."""
 
-    portfolios, keyboard = [], []
-
-    # Create a list of all of the portfolio names found under the user's id
-    for i in db.portfolios.find({'owner':update.message.from_user.__dict__['id']}):
-        portfolios.append(i['name'])
-
-    # Check if user has a portfolio, if not, quit out of the function
-    if len(portfolios) == 0:
+    portfolios = portfolio.view_all(update.message.from_user.__dict__['id'])
+    if portfolios == None:
         update.message.reply_text(
-            'You do not have any portfolios.\nUse <b>/create (name)</b> to create one!',
-            parse_mode=ParseMode.HTML)
+            f'You don\'t have any portfolios 😢\n'
+            f'You can create one using <b>/create (name)</b>',
+            parse_mode=ParseMode.HTML
+        )
         return False
+
+    keyboard = []
 
     # Create the markup keyboard from the list of portfolio names
     for i in portfolios:
@@ -123,9 +112,6 @@ def portfolios(bot, update):
         '<b>Select which portfolio you want to review:</b>', 
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML)
-
-    # Close the database connection
-    mgclient.close()
     return True
 
 
@@ -134,49 +120,12 @@ def create(bot, update, args):
 
     user_id = update.message.from_user.__dict__['id']
     
-    ## Check if user already has a portfolio with the same name
-    # Create a potential portfolio for the user to compare to the one that could be in the DB
-    potential = pf.get_item(
-        Key={
-            'user': user_id
-        }
-    )
-    
-    # If the 'Item' key is in the potential dictionary, the user has already been created.
-    if 'Item' in potential:
-        # If the portfolio name is already within the dictionary, the portfolio has already been created.
-        if args[0] in potential['Item']['portfolios']:
-            update.message.reply_text(f'You already have a portfolio named {args[0]}!')
-            return False
-        
-        # Otherwise we just update the list of all portfolios for that user here.
-        else:
-            pf.update_item(
-                Key={
-                    'user': user_id
-                },
-                UpdateExpression=f"set portfolios.{args[0]} = :r",
-                ExpressionAttributeValues={
-                    ':r':{'tickers':{}, 'value':0}
-                }
-            )
-    
-    # Since the 'Item' is not in the potential dictionary, user was not created so do that here.
+    if portfolio.create(user_id, args[0]):
+        update.message.reply_text(f'Your portfolio, {args[0].title()} was created!', quote=False)
     else:
-        pf.put_item(
-            Item={
-                'user': user_id,
-                'portfolios': {
-                    args[0]: {
-                        'tickers': {},
-                        'value': 0
-                    }
-                }
-            }
-        )
+        update.message.reply_text(f'You already have a portfolio called {args[0].title()}.')
 
-    update.message.reply_text(f'Your portfolio, {args[0].title()} was created!', quote=False)
-    return True
+    return None
 
 
 def delete(bot, update, args):
@@ -191,25 +140,19 @@ def delete(bot, update, args):
 def button(bot, update):
     """Handles the behavior of the inline buttons."""
 
-    # Open the database connection
-    mgclient = MongoClient()
-    db = mgclient.user_db           # Connect to database of user information
-    portfolio_db = db.portfolios    # Connect to table of portfolio data
-
     # Retrieve the information on which button was pressed
     query = update.callback_query
+    user_id = query['message']['chat']['id']
 
     # Find which portfolio the user selected based on the returned query
-    portfolio = portfolio_db.find_one({'owner':query.from_user['id'], 'name':query.data})
-    text = f"<b>{query.data}</b>\nValue: ${portfolio['value']}"
+    this_portfolio = portfolio.view(user_id, query.data)
+    text = f"<b>{query.data}</b>\nValue: ${this_portfolio['value']}"
 
     bot.edit_message_text(text=text,
                           chat_id=query.message.chat_id,
                           message_id=query.message.message_id,
                           parse_mode=ParseMode.HTML)
 
-    # Close the database connection
-    mgclient.close()
     return True
 
 
