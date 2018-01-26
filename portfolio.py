@@ -1,72 +1,72 @@
-# This is the portfolio class.
+# Manages all portfolio functions to keep bot.py cleaner
 
-import requests # to use to determine the value of the portfolio
-import json
+import boto3
+import database_lookup as database
+db = boto3.resource('dynamodb')
+pf = db.Table('portfolios')
 
-class Portfolio(object):
-	def __init__(self, owner, name):
-		self.owner = owner
-		self.name = name 	# name of the portfolio
-		self.shares = {} 	# this is a dictionary where the keys are the tickers, and the 
-		self.value = 0
+def create(user_id, p_name):
+    """This function will attempt to create a portfolio for the user.
+    Will return True or False based on whether it was dable to do so."""
 
-	def get_shares(self):
-		"""Returns the stocks that are currently being tracked in the porfolio."""
-		return self.shares
+    ## Check if user already has a portfolio with the same name
+    if database.existance(user_id):
+        if database.portfolio_existance(user_id, p_name):
+            return False
+        
+        # Otherwise we just update the list of all portfolios for that user here.
+        else:
+            pf.update_item(
+                Key={
+                    'user': user_id
+                },
+                UpdateExpression=f"set portfolios.{p_name} = :r",
+                ExpressionAttributeValues={
+                    ':r':{'tickers':{}, 'value':0}
+                }
+            )
+    
+    # Since the 'Item' is not in the potential dictionary, user was not created so do that here.
+    else:
+        pf.put_item(
+            Item={
+                'user': user_id,
+                'portfolios': {
+                    p_name: {
+                        'tickers': {},
+                        'value': 0
+                    }
+                }
+            }
+        )
+        
+    return True
 
+def view_all(user_id):
+    """Returns all portfolio names in a list for the given user."""
+    if not database.existance(user_id):
+        return None
 
-	def get_owner(self):
-		""""Returns the telegram user that owns the portfolio."""
-		return self.owner
+    else:
+        names = pf.get_item(
+            Key={
+                'user': user_id
+            }
+        )['Item']['portfolios'].keys()
 
+        return list(names)
 
-	def get_value(self):
-		"""Returns the value of the user's portfolio."""
-		if len(self.shares) == 0:
-			return 0
+def view(user_id, p_name):
+    """Returns the information of a specific portfolio. Returns a dictionary."""
 
-		tickers, value = '', 0
-		for ticker in self.shares.keys():
-			tickers += ticker + ','
+    if not database.portfolio_existance(user_id, p_name):
+        return None
 
-		raw_data = requests.get(f'https://api.iextrading.com/1.0/stock/market/batch?symbols={tickers}&types=quote')
-		data = json.loads(raw_data.text)
+    else:
+        info = pf.get_item(
+            Key={
+                'user': user_id
+            }
+        )['Item']['portfolios'][p_name]
 
-		for i in data:
-			value += data[i]['quote']['close'] * self.shares[i]
-
-		return value
-
-
-	def add_share(self, stock, shares=0):
-		"""Adds a number of shares to  the user's portfolio."""
-		stock = stock.upper()
-
-		if shares == 0:		# the amount of shares cannot be 0
-			return False
-
-		# checks if the stock is already in the portfolio
-		if stock in list(self.shares.keys()):
-			self.shares[stock] += shares
-		else:
-			self.shares[stock] = shares
-		return True
-	
-
-	def remove_share(self, stock, shares=None):
-		"""Removes a certain amount of shares from the user's portfolio."""
-		stock = stock.upper()
-		
-		if stock in list(self.shares.keys()):
-			if shares == None or shares >= self.shares[stock]:
-				del self.shares[stock]
-			else:
-				self.shares[stock] -= shares
-			return True
-		else:
-			return False
-
-
-	def __str__(self):
-		"""For database and testing purposes, this is a representation of the portfolio object."""
-		return "{'user':self.owner, 'name':self.name, 'shares':self.shares, 'value':self.value}"
+    return info # i am a dictionary
