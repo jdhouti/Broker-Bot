@@ -8,6 +8,7 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, Callb
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
 import logging, requests, json, random, boto3
 import portfolio
+import database_lookup as database
 
 TOKEN = "TOKEN"
 
@@ -21,6 +22,15 @@ logger = logging.getLogger(__name__)
 def start(bot, update):
     """Send a message when the command /start is issued and creates database entry."""
     update.message.reply_text('This bot is your new personal broker 😎\nType /help to get started.', quote=False)
+
+    # when the /start command is run, script checks if user has a database entry.
+    if not database.existance(update.message.from_user.__dict__['id']):
+        database.table.put_item(
+            Item={
+                'user': update.message.from_user.__dict__['id'],
+                'portfolios': {}
+            }
+        )
 
 
 def help(bot, update):
@@ -91,7 +101,7 @@ def portfolios(bot, update):
     """Returns all portfolio information when the /portfolios command is issued."""
 
     portfolios = portfolio.view_all(update.message.from_user.__dict__['id'])
-    if portfolios == None:
+    if len(portfolios) == 0:
         update.message.reply_text(
             f'You don\'t have any portfolios 😢\n'
             f'You can create one using <b>/create (name)</b>',
@@ -102,7 +112,7 @@ def portfolios(bot, update):
     keyboard = []
 
     # Create the markup keyboard from the list of portfolio names
-    for i in portfolios:
+    for i in portfolios.keys():
         keyboard.append([InlineKeyboardButton(i, callback_data=i)])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -119,7 +129,8 @@ def create(bot, update, args):
     """Creates a portfolio for the user when the /create command is issued."""
 
     user_id = update.message.from_user.__dict__['id']
-    
+    args[0] = args[0].title()
+
     if portfolio.create(user_id, args[0]):
         update.message.reply_text(f'Your portfolio, {args[0].title()} was created!', quote=False)
     else:
@@ -131,10 +142,15 @@ def create(bot, update, args):
 def delete(bot, update, args):
     """Deletes a portfolio from the database"""
 
-    # Open db connection
-    mgclient = MongoClient()
-    db = mgclient.user_db           # Create database for user information
-    portfolio_db = db.portfolios    # Create table for portfolio data
+    user_id = update.message.from_user.__dict__['id']
+    args[0] = args[0].title()
+
+    if portfolio.delete(user_id, args[0]):
+        update.message.reply_text(f'Your portfolio, {args[0].title()} was deleted!')
+    else:
+        update.message.reply_text(f'You don\'t have a portfolio called {args[0].title()}!')
+    
+    return None
 
 
 def button(bot, update):
@@ -175,6 +191,7 @@ def main():
     dp.add_handler(CommandHandler("price", price, pass_args=True))
     dp.add_handler(CommandHandler("news", news, pass_args=True))
     dp.add_handler(CommandHandler("create", create, pass_args=True))
+    dp.add_handler(CommandHandler("delete", delete, pass_args=True))
     dp.add_handler(CommandHandler("portfolios", portfolios))
     dp.add_handler(CallbackQueryHandler(button))
 
