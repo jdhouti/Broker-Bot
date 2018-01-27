@@ -1,10 +1,19 @@
-# Manages all portfolio functions to keep bot.py cleaner
+# Hi, my name is Portfolio. Allow me to introduce myself.
+# I am the module that houses all of the portfolio related functions.
+# I am not a class because there is no portfolio object. Portfolio objects are actually dictionaries
+# stored in the cloud. I'm just the file that helps retrieve that dictionary information and make
+# updates to it.
+
+# This cloud that I refer to is the AWS DynamoDB which is a nosql database created by Amazon.
 
 import boto3, requests, json
 import database_lookup as database
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 db = boto3.resource('dynamodb')
 pf = db.Table('portfolios')
+
+current = ""
 
 def create(user_id, p_name):
     """This function will attempt to create a portfolio for the user.
@@ -76,7 +85,7 @@ def update_values(user_id, p_name):
 
 
 def view_all(user_id):
-    """Returns all portfolio names in a list for the given user."""
+    """Creates a dictionary of all portfolios for a user and returns that portfolio."""
 
     portfolios = pf.get_item(
         Key={
@@ -85,6 +94,7 @@ def view_all(user_id):
     )['Item']['portfolios']
 
     return portfolios
+
 
 def view(user_id, p_name):
     """Returns the information of a specific portfolio. Returns a dictionary."""
@@ -100,3 +110,20 @@ def view(user_id, p_name):
         )['Item']['portfolios'][p_name]
 
     return info # i am a dictionary
+
+
+def get_keyboard(user_id):
+    """Returns a portfolio Telegram keyboard object of all portfolio names."""
+
+    portfolios = view_all(user_id)
+    
+    if len(portfolios) == 0:
+        return False
+
+    keyboard = []
+
+    # Create the markup keyboard from the list of portfolio names
+    for i in portfolios.keys():
+        keyboard.append([InlineKeyboardButton(i, callback_data=i)])
+
+    return InlineKeyboardMarkup(keyboard)
