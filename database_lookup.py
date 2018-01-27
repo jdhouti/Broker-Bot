@@ -23,4 +23,4 @@ def portfolio_existance(user_id, name):
         }
     )
 
-    return name in entry['Item']['portfolios'].keys()
+    return name in entry['Item']['portfolios'].keys() #BOOLEAN
