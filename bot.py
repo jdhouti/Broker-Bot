@@ -4,7 +4,7 @@
 # This is the testing bot. Everything included in this file has not yet been released.
 # Currently undergoing active development and testing.
 
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackQueryHandler, ConversationHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode
 import logging, requests, json, random, boto3
 import portfolio
@@ -17,11 +17,12 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+ADD, INFO, DELETECONF, DELETEFINAL = range(4)
 
 # This is where all of the bot commands lie
 def start(bot, update):
     """Send a message when the command /start is issued and creates database entry."""
-    update.message.reply_text('This bot is your new personal broker 😎\nType /help to get started.', quote=False)
+    update.message.reply_text('This bot is ready to be your new personal broker 😎\nType /help to get started.', quote=False)
 
     # when the /start command is run, script checks if user has a database entry.
     if not database.existance(update.message.from_user.__dict__['id']):
@@ -40,33 +41,51 @@ def help(bot, update):
                         '/price (ticker) - find current stock price\n'
                         '/news (ticker) - latest news on company (top 5)\n\n'
                         '<b>Portfolio Settings</b>\n'
-                        '/portfolios - view all portfolios you\'ve created'
+                        '/portfolios - view all portfolios you\'ve created\n'
                         '/create (name) - creates a portfolio')
     update.message.reply_text(formatted_string, quote=False, parse_mode=ParseMode.HTML)
 
 
 def price(bot, update, args):
     """Send a message with the stock price of the ticker."""
-    try:
+    if len(args) == 0:
+        update.message.reply_text(u'Incorrect usage. Refer to /help.')
+        return
+
+    try:    # try collecting all of the data
         raw_data = requests.get(f'https://api.iextrading.com/1.0/stock/{args[0]}/quote')
         data = json.loads(raw_data.text)
-
         price = "$" + '{:20,.2f}'.format(data['latestPrice'])
         company = data['companyName']
         volume = "$" + '{:20,.2f}'.format(data['avgTotalVolume'])
         mktcap = "$" + '{:20,.2f}'.format(data['marketCap'])
-        
-        string = (f'<b>{company} ({args[0].upper()}</b>)'
-                    f'\n😎 Price: {price.replace(" ", "")}'
-                    f'\n💰 Volume: {volume.replace(" ", "")}'
-                    f'\n🌡️ Market Cap: {mktcap.replace(" ", "")}')
-        update.message.reply_text(string, quote=False, parse_mode=ParseMode.HTML)
-
-        return None
-
-    except json.decoder.JSONDecodeError:
+    
+    except json.decoder.JSONDecodeError:    # was unable to collect all data so ticker isn't valid
         update.message.reply_text(f'{args[0].upper()} isn\'t a valid ticker 😔', quote=False)
-        return None
+        return
+
+    string = (f'<b>{company} ({args[0].upper()}</b>)'
+                f'\n😎 Price: {price.replace(" ", "")}'
+                f'\n💰 Volume: {volume.replace(" ", "")}'
+                f'\n🌡️ Market Cap: {mktcap.replace(" ", "")}')
+
+    keyboard = [
+        [InlineKeyboardButton(u'Add to portfolio', callback_data=str(PRICE))]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    update.message.reply_text(string, quote=False, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+    return ADD
+
+
+def add(bot, update):
+    query = update.callback_query
+
+    bot.edit_message_text(
+        text='Feature not yet available.',
+        chat_id=query.message.chat_id,
+        message_id=query.message.message_id,
+    )
 
 
 def news(bot, update, args):
@@ -99,34 +118,26 @@ def news(bot, update, args):
 
 def portfolios(bot, update):
     """Returns all portfolio information when the /portfolios command is issued."""
+    user_id = update.message.from_user.__dict__['id']
 
-    portfolios = portfolio.view_all(update.message.from_user.__dict__['id'])
-    if len(portfolios) == 0:
-        update.message.reply_text(
-            f'You don\'t have any portfolios 😢\n'
-            f'You can create one using <b>/create (name)</b>',
-            parse_mode=ParseMode.HTML
-        )
-        return False
-
-    keyboard = []
-
-    # Create the markup keyboard from the list of portfolio names
-    for i in portfolios.keys():
-        keyboard.append([InlineKeyboardButton(i, callback_data=i)])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    if not portfolio.get_keyboard(user_id):
+        update.message.reply_text(u'You don\'t have any portfolios 😢\nUse /create (portfolio_name).')
+        return
 
     # Ask the user which portfolio he would like to use
     update.message.reply_text(
-        '<b>Select which portfolio you want to review:</b>', 
-        reply_markup=reply_markup,
+        '<b>Select the portfolio you would like to review</b>', 
+        reply_markup=portfolio.get_keyboard(user_id),
         parse_mode=ParseMode.HTML)
-    return True
+    return INFO
 
 
 def create(bot, update, args):
     """Creates a portfolio for the user when the /create command is issued."""
+
+    if len(args) == 0:
+        update.message.reply_text(u'Incorrect usage. Refer to /help.')
+        return
 
     user_id = update.message.from_user.__dict__['id']
     args[0] = args[0].title()
@@ -138,20 +149,70 @@ def create(bot, update, args):
 
     return None
 
-
-def delete(bot, update, args):
-    """Deletes a portfolio from the database"""
-
+##
+# this is the beginning of the deletion conversation
+##
+def delete(bot, update):
+    """Starts the deletion of a portfolio from the database"""
     user_id = update.message.from_user.__dict__['id']
-    args[0] = args[0].title()
+    if not portfolio.get_keyboard(user_id):
+        update.message.reply_text(u'You don\'t have any portfolios 😢\nUse /create (portfolio_name).')
+        return
 
-    if portfolio.delete(user_id, args[0]):
-        update.message.reply_text(f'Your portfolio, {args[0].title()} was deleted!')
+    update.message.reply_text(
+        '<b>Select the portfolio you would like to delete</b>',
+        reply_markup=portfolio.get_keyboard(user_id),
+        parse_mode=ParseMode.HTML
+    )
+    return DELETECONF
+
+
+def delete_conf(bot, update):
+    """Confirms if the user really wants to delete the portfolio."""
+    query = update.callback_query
+    portfolio.current = query.data
+
+    keyboard = [
+        [InlineKeyboardButton("Yes", callback_data="Yes"),
+        InlineKeyboardButton("No", callback_data="No")]
+    ]
+
+    bot.edit_message_text(
+        f"Are you sure you would like to <b>delete</b> {query.data}?",
+        chat_id=query.message.chat_id,
+        message_id=query.message.message_id,
+        parse_mode=ParseMode.HTML
+    )
+    bot.edit_message_reply_markup(
+        chat_id=query.message.chat_id,
+        message_id=query.message.message_id,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return DELETEFINAL
+
+
+def delete_final(bot, update):
+    """Final step in the deletion process. Will either complete or abort the deletion process."""
+    query = update.callback_query
+    user_id = query['message']['chat']['id']
+
+    if query.data == 'Yes' and portfolio.delete(user_id, portfolio.current):
+        bot.edit_message_text(
+            f'Ok. Your portfolio, {portfolio.current} was deleted.',
+            chat_id=query.message.chat_id,
+            message_id=query.message.message_id
+        )
     else:
-        update.message.reply_text(f'You don\'t have a portfolio called {args[0].title()}!')
-    
-    return None
-
+        bot.edit_message_text(
+            'Ok. Aborted deletion process.',
+            chat_id=query.message.chat_id,
+            message_id=query.message.message_id
+        )
+    portfolio.current = ""
+    return
+##
+# End of the deletion conversation
+##
 
 def button(bot, update):
     """Handles the behavior of the inline buttons."""
@@ -188,25 +249,47 @@ def main():
     # on different commands - answer in Telegram
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help))
-    dp.add_handler(CommandHandler("price", price, pass_args=True))
     dp.add_handler(CommandHandler("news", news, pass_args=True))
     dp.add_handler(CommandHandler("create", create, pass_args=True))
-    dp.add_handler(CommandHandler("delete", delete, pass_args=True))
-    dp.add_handler(CommandHandler("portfolios", portfolios))
-    dp.add_handler(CallbackQueryHandler(button))
+    
+    portfolio_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("portfolios", portfolios)],
+        states={
+        INFO: [CallbackQueryHandler(button)]
+        },
+        fallbacks=[CommandHandler("portfolios", portfolios)]
+    )
+
+    price_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("price", price, pass_args=True)],
+        states={
+            ADD: [CallbackQueryHandler(add)]
+        },
+        fallbacks=[CommandHandler("price", price, pass_args=True)]
+    )
+
+    deletion_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("delete", delete)],
+        states={
+            DELETECONF: [CallbackQueryHandler(delete_conf)],
+            DELETEFINAL: [CallbackQueryHandler(delete_final)]
+        },
+        fallbacks=[CommandHandler("delete", delete)]
+    )
 
     # log all errors
     dp.add_error_handler(error)
 
     # Start the Bot
+    updater.dispatcher.add_handler(price_conv_handler)
+    updater.dispatcher.add_handler(portfolio_conv_handler)
+    updater.dispatcher.add_handler(deletion_conv_handler)
     updater.start_polling()
 
     # Run the bot until you press Ctrl-C or the process receives SIGINT,
     # SIGTERM or SIGABRT. This should be used most of the time, since
     # start_polling() is non-blocking and will stop the bot gracefully.
     updater.idle()
-    mg.close()
-
 
 if __name__ == '__main__':
     main()
